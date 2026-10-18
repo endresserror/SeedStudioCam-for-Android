@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.endresserror.xiaoblecam'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.endresserror.xiaoblecam'
+        minSdk 26
+        targetSdk 32
+        versionCode 1
+        versionName '0.1.0'
+    }
+}
