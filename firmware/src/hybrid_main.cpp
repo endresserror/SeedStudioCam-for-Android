@@ -3,6 +3,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <BLESecurity.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
 #include <esp_camera.h>
@@ -145,6 +146,17 @@ class BleServerCallbacks final : public BLEServerCallbacks {
       ble_value_limit = value_bytes;
     }
   }
+};
+
+// The board has no display or keypad, so BLE uses Secure Connections bonding
+// with Just Works. This encrypts the link and stores the bond, but does not
+// provide MITM protection during the first pairing.
+class BleSecurityCallbacks final : public BLESecurityCallbacks {
+  uint32_t onPassKeyRequest() override { return 0; }
+  void onPassKeyNotify(uint32_t) override {}
+  bool onSecurityRequest() override { return true; }
+  void onAuthenticationComplete(esp_ble_auth_cmpl_t) override {}
+  bool onConfirmPIN(uint32_t) override { return true; }
 };
 
 class BleControlCallbacks final : public BLECharacteristicCallbacks {
@@ -434,13 +446,20 @@ void setup() {
   media_server.setNoDelay(true);
   BLEDevice::init(BLE_NAME);
   BLEDevice::setMTU(517);
+  BLESecurity *security = new BLESecurity();
+  security->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
+  security->setCapability(ESP_IO_CAP_NONE);
+  BLEDevice::setSecurityCallbacks(new BleSecurityCallbacks());
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new BleServerCallbacks());
   BLEService *service = server->createService(BLE_SERVICE_UUID);
   ble_stream = service->createCharacteristic(BLE_STREAM_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  ble_stream->addDescriptor(new BLE2902());
+  BLE2902 *stream_cccd = new BLE2902();
+  stream_cccd->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
+  ble_stream->addDescriptor(stream_cccd);
   BLECharacteristic *control = service->createCharacteristic(
       BLE_CONTROL_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  control->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   control->setCallbacks(new BleControlCallbacks());
   service->start();
   BLEAdvertising *advertising = server->getAdvertising();

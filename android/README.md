@@ -20,6 +20,12 @@ link. A VPN configured to block local-network traffic can prevent this direct
 connection; allow LAN connections for the app in the VPN or pause the VPN while
 using the camera.
 
+On first BLE connection, approve Android's pairing prompt. The BLE control
+characteristic and stream notifications require an encrypted bonded connection.
+The XIAO has no display or keypad, so first pairing does not verify a passkey;
+approve it only when you are connecting to your own camera. If pairing fails,
+remove the camera from Android's Bluetooth settings and connect again.
+
 ## Image modes and recording
 
 QVGA 320×240 at JPEG quality 16 is the default motion mode. Use QQVGA 160×120
@@ -40,10 +46,10 @@ finalizes the file before reporting that it is saved.
 ## Build and flash
 
 Before building, replace `REPLACE_WITH_UNIQUE_PASSWORD` with the same unique
-WPA2 passphrase (8–63 characters) in `src/hybrid_main.cpp` and
+WPA2 passphrase (8–63 characters) in `firmware/src/hybrid_main.cpp` and
 `android/app/src/main/java/com/endresserror/xiaoblecam/HybridActivity.java`.
-The public source intentionally contains no working device password. Do not reuse
-the placeholder or a password published in a repository.
+Make this change only in your local working copy and do not commit the passphrase
+to the public repository. Use a different passphrase for each device.
 
 Install PlatformIO, Android command-line tools, JDK 17, and Android SDK 35.
 

@@ -1,6 +1,8 @@
 package com.endresserror.xiaoblecam;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -12,7 +14,10 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -63,6 +68,7 @@ public final class HybridActivity extends Activity {
     private Button recordButton;
     private BluetoothAdapter adapter;
     private BluetoothGatt gatt;
+    private BluetoothDevice pendingBondDevice;
     private BluetoothGattCharacteristic control;
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback wifiCallback;
@@ -92,6 +98,31 @@ public final class HybridActivity extends Activity {
         }
     };
 
+    private final BroadcastReceiver bondStateReceiver = new BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (device == null || pendingBondDevice == null || !pendingBondDevice.equals(device)) return;
+            int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+            int previous = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.ERROR);
+            if (state == BluetoothDevice.BOND_BONDED) {
+                pendingBondDevice = null;
+                BluetoothGatt connection = gatt;
+                if (connection != null && connection.getDevice().equals(device)) {
+                    setStatus("BLEペアリング済み。カメラサービスを確認中…");
+                    connection.discoverServices();
+                }
+            } else if (state == BluetoothDevice.BOND_NONE && previous == BluetoothDevice.BOND_BONDING) {
+                pendingBondDevice = null;
+                setStatus("BLEペアリングが完了しませんでした");
+                manualDisconnect = true;
+                BluetoothGatt connection = gatt;
+                if (connection != null) connection.disconnect();
+            }
+        }
+    };
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         buildUi();
@@ -99,6 +130,9 @@ public final class HybridActivity extends Activity {
         BluetoothManager manager = (BluetoothManager)getSystemService(Context.BLUETOOTH_SERVICE);
         adapter = manager == null ? null : manager.getAdapter();
         connectivity = (ConnectivityManager)getSystemService(Context.CONNECTIVITY_SERVICE);
+        IntentFilter bondFilter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(bondStateReceiver, bondFilter, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(bondStateReceiver, bondFilter);
         connectButton.setOnClickListener(v -> {
             if (gatt != null || scanning) disconnect(); else ensurePermissionsAndScan();
         });
@@ -132,7 +166,7 @@ public final class HybridActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) return new String[]{Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.NEARBY_WIFI_DEVICES};
         if (Build.VERSION.SDK_INT >= 31) return new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT};
-        return new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
+        return new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
     }
 
     private void ensurePermissionsAndScan() {
@@ -151,6 +185,7 @@ public final class HybridActivity extends Activity {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private void startScan() {
         if (scanning || adapter == null) return;
         manualDisconnect = false;
@@ -161,6 +196,7 @@ public final class HybridActivity extends Activity {
     }
 
     private final ScanCallback scanCallback = new ScanCallback() {
+        @SuppressLint("MissingPermission")
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
             BluetoothDevice device = result.getDevice();
@@ -175,15 +211,33 @@ public final class HybridActivity extends Activity {
         @Override public void onScanFailed(int errorCode) { scanning = false; setStatus("BLE検索エラー " + errorCode); }
     };
 
+    @SuppressLint("MissingPermission")
     private void stopScan() {
         if (scanning && adapter != null && adapter.getBluetoothLeScanner() != null) adapter.getBluetoothLeScanner().stopScan(scanCallback);
         scanning = false;
     }
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+        @SuppressLint("MissingPermission")
         @Override public void onConnectionStateChange(BluetoothGatt connection, int statusCode, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                connecting = false; connection.discoverServices();
+                connecting = false;
+                BluetoothDevice device = connection.getDevice();
+                if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                    connection.discoverServices();
+                } else {
+                    pendingBondDevice = device;
+                    ui.post(() -> {
+                        connectButton.setText("ペアリング中…");
+                        setStatus("Bluetoothのペア設定を承認してください");
+                    });
+                    if (device.getBondState() != BluetoothDevice.BOND_BONDING && !device.createBond()) {
+                        pendingBondDevice = null;
+                        ui.post(() -> setStatus("BLEペアリングを開始できませんでした"));
+                        manualDisconnect = true;
+                        connection.disconnect();
+                    }
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 ui.post(() -> {
                     boolean retry = !manualDisconnect && !isFinishing();
@@ -193,7 +247,12 @@ public final class HybridActivity extends Activity {
                 });
             }
         }
+        @SuppressLint("MissingPermission")
         @Override public void onServicesDiscovered(BluetoothGatt connection, int statusCode) {
+            if (statusCode != BluetoothGatt.GATT_SUCCESS) {
+                ui.post(() -> setStatus("BLEサービスの確認に失敗しました"));
+                return;
+            }
             android.bluetooth.BluetoothGattService service = connection.getService(SERVICE);
             control = service == null ? null : service.getCharacteristic(CONTROL);
             if (control == null) { ui.post(() -> setStatus("BLE制御サービスが見つかりません")); return; }
@@ -204,6 +263,7 @@ public final class HybridActivity extends Activity {
         }
     };
 
+    @SuppressLint("MissingPermission")
     private void writeControl(String command) {
         BluetoothGatt connection = gatt; BluetoothGattCharacteristic characteristic = control;
         if (connection == null || characteristic == null) return;
@@ -244,13 +304,19 @@ public final class HybridActivity extends Activity {
         requestCameraWifiSpecifier();
     }
 
+    @TargetApi(Build.VERSION_CODES.Q)
+    @SuppressLint("InlinedApi")
     private void requestCameraWifiSpecifier() {
         if (wifiCallback != null || gatt == null) return;
         setStatus("画面の確認でカメラWi-Fiへ接続してください…");
         WifiNetworkSpecifier specifier = new WifiNetworkSpecifier.Builder().setSsid(WIFI_SSID).setWpa2Passphrase(WIFI_PASSWORD).build();
-        NetworkRequest request = new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_LOCAL_NETWORK)
-                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).setNetworkSpecifier(specifier).build();
+        NetworkRequest.Builder requestBuilder = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .setNetworkSpecifier(specifier);
+        if (Build.VERSION.SDK_INT >= 35)
+            requestBuilder.addCapability(NetworkCapabilities.NET_CAPABILITY_LOCAL_NETWORK);
+        NetworkRequest request = requestBuilder.build();
         wifiCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 wifiNetwork = network; startMediaSocket(network);
@@ -435,6 +501,7 @@ public final class HybridActivity extends Activity {
         if (socket != null) try { socket.close(); } catch (Exception ignored) { }
     }
 
+    @SuppressLint("MissingPermission")
     private void disconnect() {
         manualDisconnect = true;
         Mp4Recorder activeRecorder = recorder;
@@ -448,13 +515,14 @@ public final class HybridActivity extends Activity {
         releaseAll();
     }
 
+    @SuppressLint("MissingPermission")
     private void releaseAll() {
         closeMediaSocket();
         if (wifiCallback != null && connectivity != null) {
             try { connectivity.unregisterNetworkCallback(wifiCallback); } catch (Exception ignored) { }
             wifiCallback = null;
         }
-        BluetoothGatt current = gatt; gatt = null; control = null;
+        BluetoothGatt current = gatt; gatt = null; control = null; pendingBondDevice = null;
         if (current != null) current.close();
         wifiNetwork = null; frames = 0; lastFrameMs = 0; audioPackets = 0; frameSize = 5;
         qualityButton.setText(imageModeLabel(frameSize)); connectButton.setText("カメラを検索");
@@ -463,5 +531,10 @@ public final class HybridActivity extends Activity {
 
     private void setStatus(String value) { status.setText(value); }
     @Override public void onBackPressed() { if (fullScreen) setFullScreen(false); else super.onBackPressed(); }
-    @Override protected void onDestroy() { disconnect(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        try { unregisterReceiver(bondStateReceiver); } catch (IllegalArgumentException ignored) { }
+        pendingBondDevice = null;
+        disconnect();
+        super.onDestroy();
+    }
 }

@@ -1,0 +1,11 @@
+# PlatformIO build output
+firmware/.pio/
+
+# Android and Gradle build output
+android/.gradle/
+android/**/build/
+local.properties
+
+# Local IDE and OS files
+.idea/
+.DS_Store

@@ -1,6 +1,7 @@
 package com.endresserror.xiaoblecam;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -95,7 +96,7 @@ public final class MainActivity extends Activity {
 
     private String[] permissions() {
         if (Build.VERSION.SDK_INT >= 31) return new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT};
-        return new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
+        return new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
     }
 
     private void ensurePermissionsAndScan() {
@@ -115,6 +116,7 @@ public final class MainActivity extends Activity {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private void startScan() {
         if (adapter == null || scanning) return;
         setStatus("XIAO-Camを検索中…"); scanning = true;
@@ -124,6 +126,7 @@ public final class MainActivity extends Activity {
     }
 
     private final ScanCallback scanCallback = new ScanCallback() {
+        @SuppressLint("MissingPermission")
         @Override public void onScanResult(int type, ScanResult result) {
             BluetoothDevice device = result.getDevice();
             String name = result.getScanRecord() != null ? result.getScanRecord().getDeviceName() : null;
@@ -144,12 +147,14 @@ public final class MainActivity extends Activity {
         @Override public void onScanFailed(int error) { scanning = false; setStatus("BLE検索エラー: " + error); }
     };
 
+    @SuppressLint("MissingPermission")
     private void stopScan() {
         if (scanning && adapter != null && adapter.getBluetoothLeScanner() != null) adapter.getBluetoothLeScanner().stopScan(scanCallback);
         scanning = false;
     }
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+        @SuppressLint("MissingPermission")
         @Override public void onConnectionStateChange(BluetoothGatt connection, int statusCode, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 synchronized (MainActivity.this) { connecting = false; }
@@ -165,10 +170,12 @@ public final class MainActivity extends Activity {
                 });
             }
         }
+        @SuppressLint("MissingPermission")
         @Override public void onMtuChanged(BluetoothGatt connection, int mtu, int statusCode) {
             connection.discoverServices();
             ui.post(() -> setStatus("BLE接続済み (MTU " + mtu + ")。サービスを確認中…"));
         }
+        @SuppressLint("MissingPermission")
         @Override public void onServicesDiscovered(BluetoothGatt connection, int statusCode) {
             BluetoothGattService service = connection.getService(SERVICE);
             if (service == null) { ui.post(() -> setStatus("XIAO-Camサービスがありません。BLEファームウェアを確認してください")); return; }
@@ -179,6 +186,7 @@ public final class MainActivity extends Activity {
             descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
             connection.writeDescriptor(descriptor);
         }
+        @SuppressLint("MissingPermission")
         @Override public void onDescriptorWrite(BluetoothGatt connection, BluetoothGattDescriptor descriptor, int statusCode) {
             writeControl("SUBSCRIBE");
             ui.postDelayed(() -> writeControl("START"), 100);
@@ -192,6 +200,7 @@ public final class MainActivity extends Activity {
         }
     };
 
+    @SuppressLint("MissingPermission")
     private void writeControl(String command) {
         BluetoothGatt connection = gatt;
         BluetoothGattCharacteristic characteristic = controlCharacteristic;
@@ -259,6 +268,7 @@ public final class MainActivity extends Activity {
         return (short)(((u & 0x80) != 0) ? (0x84 - t) : (t - 0x84));
     }
 
+    @SuppressLint("MissingPermission")
     private void disconnect() {
         stopScan(); writeControl("STOP");
         BluetoothGatt current = gatt;
@@ -266,6 +276,7 @@ public final class MainActivity extends Activity {
         releaseConnection();
     }
 
+    @SuppressLint("MissingPermission")
     private void releaseConnection() {
         BluetoothGatt current = gatt; gatt = null; streamCharacteristic = null; controlCharacteristic = null;
         if (current != null) current.close();
